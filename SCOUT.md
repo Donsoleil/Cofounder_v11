@@ -119,14 +119,18 @@ Picks up from `scout-tracker.csv`. This part owns the evidence, score, draft and
 
 ## 9. Choices and connections
 
-| Choice | Selected | Reads its key from |
+| Choice | Selected | Reached through |
 |---|---|---|
-| Evidence model | Jev (TypeSafe AI, System One) | `TYPESAFE_API_KEY` (the name Jev's own SDK uses) |
-| Review collector | SerpApi, Google Maps Reviews engine | `SERPAPI_API_KEY` |
+| Evidence model | Jev (TypeSafe AI, System One) | Composio tool `JEV_EVALUATE_STATE` |
+| Review collector | SerpApi, Google Maps Reviews engine | Composio tools `SERPAPI_LIST_GOOGLE_MAPS_REVIEWS` and `SERPAPI_GOOGLE_MAPS_SEARCH` |
 
-Composio also lists Jev and SerpApi toolkits, but neither has an active connection on this account. This runbook uses environment variables instead, because the scripts must write raw responses to disk themselves; passing 100 KB of review JSON through a chat window to be re-typed into a file would risk exactly the truncation and edits this job forbids.
+**Composio is the route (your instruction).** Each toolkit needs an authenticated Composio connection: ask Composio for a connect link (`COMPOSIO_MANAGE_CONNECTIONS`, toolkits `serpapi` and `jev`), open it, and enter your own key in Composio's form. The key never appears in chat, in this repo, or in any file here. Links expire after about 10 minutes.
 
-**How the keys get in.** Add the two variables in the cloud environment's settings (the environment menu in the session's title bar, then Edit; under API credentials where that section is offered, otherwise as environment variables). A new session picks them up. Never paste a key into chat. The scripts read them with `os.environ`, never print them, never save them, and scrub them from error messages. The tests plant dummy keys and prove they appear in no saved file.
+**Where the work runs.** Composio's remote workbench is a persistent Python 3.13 sandbox with open internet access and a preloaded `run_composio_tool` helper. The network stages (collect and read) run there, so raw responses and fetched pages stay on its disk instead of passing through chat. Cells have a hard 180-second limit; the pipeline pauses itself at about 150 seconds, saves everything, and the next cell resumes without repeating any call. Afterwards the evidence folder is zipped, uploaded with `upload_local_file`, and downloaded here (tested: a workbench upload downloads cleanly with `curl -L`). Ranking, letters and verification then run locally.
+
+**Two differences from calling the APIs directly.** Composio returns each tool's parsed JSON, so the "raw response" saved for each model call is that JSON (model, answers, probabilities, usage), not the HTTP bytes. And the review count to reconcile still comes from `place_info.reviews`.
+
+**Alternative route (no Composio).** The same code can call SerpApi and Jev directly. Set `SERPAPI_API_KEY` and `TYPESAFE_API_KEY` in the cloud environment's settings (the environment menu, then Edit), start a new session, and run the commands in section 12. The scripts read keys with `os.environ`, never print or save them, and the tests prove dummy keys appear in no saved file.
 
 ## 10. What the official docs say (checked 2026-10-06)
 
@@ -173,7 +177,18 @@ python3 -I scout/lead.py close biz-151 --as mailed --confirm
 python3 -I scout/test_lead.py
 ```
 
-`run` is select, estimate, collect, read, score. `test_lead.py` is an offline end-to-end test with a mock model and mock collector; it uses only labelled SAMPLE data in a temp folder, and says nothing about Jev's accuracy.
+`run` is select, estimate, collect, read, score. `test_lead.py` is an offline end-to-end test with a mock model and mock collector; it uses only labelled SAMPLE data in a temp folder, and says nothing about Jev's accuracy. `LEAD_TEST_TRANSPORT=composio python3 -I scout/test_lead.py` runs the same test through the Composio mapping with a fake executor shaped like Composio's published output schemas.
+
+### 12b. Run through Composio
+
+1. `python3 -I scout/lead.py select` and `estimate` (local, free).
+2. `python3 -I scout/composio_bundle.py` writes `scout/lead/workbench-bundle.b64` (modules, a stand-in for `scout.py`, the selected tracker rows, the local suppression and spend files).
+3. In the workbench: unpack the bundle into `/mnt/files/oc`, set `SCOUT_HOME=/mnt/files/oc`, `import lead, composio_transport`, then `composio_transport.install(lead, run_composio_tool)`. If SerpApi is not connected yet, pass `place_tool="COMPOSIO_SEARCH_GOOGLE_MAPS"` for the place search only (it needs no connection); reviews still need SerpApi.
+4. In each cell set `lead.DEADLINE = time.time() + 150`, then call `lead.cmd_collect(5.0)` and `lead.cmd_read(5.0)`. A `PAUSED` line means run the same cell again.
+5. Zip `/mnt/files/oc/scout/lead`, `upload_local_file` it, download the link with `curl -L` here, and unzip over `scout/lead/`.
+6. Locally: `lead.py score`, `draft`, `verify`.
+
+Composio schemas checked 2026-10-06: `SERPAPI_LIST_GOOGLE_MAPS_REVIEWS` takes `place_id` or `data_id`, `sort_by`, `next_page_token`, `review_count` (1 to 20) and `language`, and returns `reviews`, `place_info` and `serpapi_pagination`; `JEV_EVALUATE_STATE` takes `model`, `state` and `questions` and returns `model`, `answers` (Choice answers carry `choice`, `probabilities`, `confidence`) and `usage`. A one-business lookup through Composio's built-in Google Maps search showed Maps lists a website and a review total, and returns reviewer names inside `user_reviews`; the pipeline stores none of that.
 
 ## 13. Rules
 
@@ -209,7 +224,7 @@ A yes needs the quote. A no needs an explicit contradiction quote. Yes and no to
 
 ## 15. Unfinished in part 2
 
-1. **No live run yet.** Both keys are missing from this environment, and the sender details have not been supplied, so nothing has been collected or drafted. The offline test covers the mechanics only.
-2. The two items marked unconfirmed in section 10 (SerpApi `website` key, owner-reply shape).
+1. **No live run yet.** The Composio connections for SerpApi and Jev still need your key entered at Composio, and the sender details have not been supplied, so nothing has been collected or drafted. The offline test covers the mechanics only.
+2. Still unconfirmed: the shape of an owner reply on a review. (Settled by a live lookup: Maps place results do carry a `website`.)
 3. Third-party sites may block the web-page fetch; blocked pages are logged as exceptions, not retried around.
 4. A model other than Jev needs its own adapter.

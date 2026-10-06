@@ -112,7 +112,6 @@ SERP_CALLS = []
 
 def fake_serp(p):
     SERP_CALLS.append(dict(p))
-    lead.SPEND["serp_searches"] += 1
     if p["engine"] == "google_maps" and p.get("type") == "search":
         q = p["q"]
         if "ALPHA" in q:
@@ -162,7 +161,33 @@ def fake_jev(payload):
     return 200, json.dumps(dict(model="jev-1.13.0", answers=ans, usage=dict(input_tokens=max(1, len(json.dumps(payload)) // 4), output_tokens=20)))
 
 
-lead.serp_get, lead.jev_post = fake_serp, fake_jev
+MODE = os.environ.get("LEAD_TEST_TRANSPORT", "direct")
+
+
+def fake_run_composio_tool(slug, args):
+    """Stands in for the workbench helper; returns Composio-shaped envelopes (data / successful / error)."""
+    if slug == "SERPAPI_GOOGLE_MAPS_SEARCH":
+        return {"data": {"results": fake_serp({"engine": "google_maps", "type": "search", "q": args["q"]})}, "successful": True}, ""
+    if slug == "SERPAPI_LIST_GOOGLE_MAPS_REVIEWS":
+        p = {"engine": "google_maps_reviews", **{k: v for k, v in args.items() if k in ("place_id", "data_id", "sort_by", "next_page_token")}}
+        if "next_page_token" in args:
+            p["num"] = args["review_count"]
+        return {"data": fake_serp(p), "successful": True}, ""
+    if slug == "JEV_EVALUATE_STATE":
+        st, text = fake_jev({"model": args["model"], "state": args["state"], "questions": args["questions"]})
+        return ({"data": json.loads(text), "successful": True}, "") if st == 200 else ({"successful": False, "error": "validation failed"}, "")
+    raise AssertionError(slug)
+
+
+if MODE == "composio":
+    import composio_transport
+    composio_transport.install(lead, fake_run_composio_tool)
+else:
+    def counted_serp(p):
+        lead.SPEND["serp_searches"] += 1
+        return fake_serp(p)
+    lead.serp_get, lead.jev_post = counted_serp, fake_jev
+print("transport:", MODE)
 lead.http_get = lambda url: lead._http(url, headers={"Accept": "text/html"}, timeout=10)
 
 print("== select, estimate")
@@ -170,8 +195,15 @@ sel = lead.cmd_select()
 T("selection = ready+ready, unsuppressed, not closed, not review", [r["biz_id"] for r in sel] == ["biz-901", "biz-902", "biz-903"], str([r["biz_id"] for r in sel]))
 est = lead.cmd_estimate()
 T("estimate prints three scenarios per business", len(est) == 9)
+print("== pause and resume")
+import time
+lead.DEADLINE = time.time() - 1
+lead.cmd_collect(5.0)
+T("an expired time slice pauses collection and saves progress", not os.path.exists(lead.LP("coverage", "biz-901.json")) and os.path.exists(lead.LP("raw", "biz-901", "place-search.json")))
+lead.DEADLINE = None
 print("== collect")
 lead.cmd_collect(5.0)
+T("resumed run did not repeat the place search (one search for ALPHA)", sum(1 for c in SERP_CALLS if c.get("type") == "search" and "ALPHA" in c.get("q", "")) == 1)
 cov = {b: json.load(open(lead.LP("coverage", f"{b}.json"))) for b in ("biz-901", "biz-902", "biz-903")}
 T("namesake in Fresno rejected, true place matched", cov["biz-901"]["place"]["place_id"] == "PID_A" and any(c["decision"] == "rejected_namesake" for c in json.load(open(lead.LP("raw", "biz-901", "place-search.json")))["candidates"]))
 T("ALPHA reviews reconcile: fetched 22, unique 21, reported 21, complete", (cov["biz-901"]["reviews"]["fetched"], cov["biz-901"]["reviews"]["unique"], cov["biz-901"]["reviews"]["reported"], cov["biz-901"]["status"]) == (22, 21, 21, "complete"), str(cov["biz-901"]["reviews"]))

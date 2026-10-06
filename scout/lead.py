@@ -119,6 +119,18 @@ class Fatal(Exception):
     pass
 
 
+class Paused(Exception):
+    """Time slice used up (the Composio workbench allows 180 seconds per cell). Progress is saved; run the same command again."""
+
+
+DEADLINE = None
+
+
+def check_deadline():
+    if DEADLINE and time.time() > DEADLINE:
+        raise Paused()
+
+
 # ---------------------------------------------------------------- small helpers
 def now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -340,9 +352,11 @@ def match_place(b):
     names = [b["legal_name"]] + [x for x in b.get("other_names", "").split(" | ") if x]
     mine = [v for n in names for v in name_variants(re.sub(r" \(CSLB #\d+\)$", "", n))]
     q = f'{b["legal_name"]} {b["address"]} {b["city"]} {b["state"]} {b["zip"][:5]}'
-    res = serp_get({"engine": "google_maps", "type": "search", "q": q, "hl": "en"})
-    cands = res.get("local_results") or ([res["place_results"]] if res.get("place_results") else [])
-    out = []
+    fp = LP("raw", b["biz_id"], "place-search.json")
+    cached = json.load(open(fp))["candidates"] if os.path.exists(fp) else None   # a resumed run does not spend another search
+    res = {} if cached is not None else serp_get({"engine": "google_maps", "type": "search", "q": q, "hl": "en"})
+    cands = [] if cached is not None else (res.get("local_results") or ([res["place_results"]] if res.get("place_results") else []))
+    out = list(cached or [])
     for c in cands:
         rel = name_match(mine, name_variants(c.get("title", "")))
         lv = addr_level((b["address"], b["city"], b["zip"]), parse_maps_address(c.get("address", "")))
@@ -353,18 +367,20 @@ def match_place(b):
                         reviews=c.get("reviews"), rating=c.get("rating"), name_relation=rel, address_level=lv, confidence=conf,
                         decision="accepted" if conf == "high" else ("rejected_namesake" if rel and lv in ("none", "city") else "rejected_weak")))
     acc = [c for c in out if c["decision"] == "accepted"]
-    jwrite(LP("raw", b["biz_id"], "place-search.json"), dict(query=q, retrieved_utc=now(), candidates=out))
+    if cached is None:
+        jwrite(fp, dict(query=q, retrieved_utc=now(), candidates=out))
     if len({c["place_id"] or c["data_id"] for c in acc}) == 1:
         return acc[0], out
     return None, out
 
 
 def place_website(place):
+    """Website from the Maps listing. If the search result lacked one, search again by exact title and address."""
     if place.get("website"):
         return place["website"]
-    res = serp_get({"engine": "google_maps", "type": "place", "place_id": place["place_id"], "hl": "en"})
-    pr = res.get("place_results") or {}
-    place["phone"] = place["phone"] or pr.get("phone", "")
+    res = serp_get({"engine": "google_maps", "type": "search", "q": f'{place["title"]} {place["address"]}', "hl": "en"})
+    pr = res.get("place_results") or next((c for c in res.get("local_results", []) if c.get("place_id") == place["place_id"]), {})
+    place["phone"] = place.get("phone") or pr.get("phone", "")
     if place.get("reviews") is None:
         place["reviews"] = pr.get("reviews")
     return pr.get("website") or (pr.get("links") or {}).get("website", "")
@@ -376,27 +392,30 @@ def sanitize_review(r):
 
 
 def collect_reviews(b, place):
+    """Follow next_page_token until it runs out. Each page is saved as it arrives, so a paused run resumes from disk."""
+    bid = b["biz_id"]
     pid = place["place_id"] or place["data_id"]
     token, seen, pages, reviews, reported, capped = None, set(), 0, [], place.get("reviews"), False
     while True:
-        p = {"engine": "google_maps_reviews", "hl": "en", "sort_by": "newestFirst"}
-        p["place_id" if place["place_id"] else "data_id"] = pid
-        if token:
-            p.update(next_page_token=token, num=20)
-        res = serp_get(p)
         pages += 1
-        info = res.get("place_info") or {}
-        if reported is None and info.get("reviews") is not None:
-            reported = info["reviews"]
+        fp = LP("raw", bid, f"reviews-page-{pages:03d}.json")
+        if os.path.exists(fp):
+            d = json.load(open(fp))
+            info, san, pag = d["place_info"], d["reviews"], d.get("serpapi_pagination", {})
+        else:
+            check_deadline()
+            p = {"engine": "google_maps_reviews", "hl": "en", "sort_by": "newestFirst"}
+            p["place_id" if place["place_id"] else "data_id"] = pid
+            if token:
+                p.update(next_page_token=token, num=20)
+            res = serp_get(p)
+            info, san, pag = res.get("place_info") or {}, [sanitize_review(x) for x in (res.get("reviews") or [])], res.get("serpapi_pagination") or {}
+            jwrite(fp, dict(params={k: v for k, v in p.items()}, retrieved_utc=now(), place_info=info, reviews=san, serpapi_pagination=pag))
         if info.get("reviews") is not None:
             reported = info["reviews"]
-        revs = res.get("reviews") or []
-        san = [sanitize_review(x) for x in revs]
-        jwrite(LP("raw", b["biz_id"], f"reviews-page-{pages:03d}.json"), dict(params={k: v for k, v in p.items()}, retrieved_utc=now(), place_info=info,
-                                                                                  reviews=san, serpapi_pagination=res.get("serpapi_pagination", {})))
         reviews += san
-        token = (res.get("serpapi_pagination") or {}).get("next_page_token")
-        if not token or token in seen or not revs:
+        token = pag.get("next_page_token")
+        if not token or token in seen or not san:
             break
         seen.add(token)
         if pages >= MAX_REVIEW_PAGES:
@@ -644,16 +663,27 @@ def collect_business(b, budget_usd):
     return cov
 
 
-def cmd_collect(budget):
+def cmd_collect(budget, fresh=False):
     sel = cmd_select()
     rows, _ = load_tracker()
     by = {r["biz_id"]: r for r in rows}
-    for r in sel:
-        b = by[r["biz_id"]]
-        if os.path.exists(LP("coverage", f'{b["biz_id"]}.json')) and json.load(open(LP("coverage", f'{b["biz_id"]}.json')))["status"] in ("complete", "partial"):
-            print(f'{b["biz_id"]}: already collected, reusing')
-            continue
-        collect_business(b, budget)
+    try:
+        for r in sel:
+            b = by[r["biz_id"]]
+            cp = LP("coverage", f'{b["biz_id"]}.json')
+            if fresh and os.path.exists(cp):
+                os.remove(cp)
+                for fn in os.listdir(LP("raw", b["biz_id"])) if os.path.isdir(LP("raw", b["biz_id"])) else []:
+                    if fn.startswith("reviews-page-") or fn == "place-search.json":
+                        os.remove(LP("raw", b["biz_id"], fn))
+            if os.path.exists(cp) and json.load(open(cp))["status"] in ("complete", "partial"):
+                print(f'{b["biz_id"]}: already collected, reusing')
+                continue
+            collect_business(b, budget)
+    except Paused:
+        print("PAUSED: time slice used up; progress is saved, run collect again")
+    finally:
+        save_spend()
 
 
 # ---------------------------------------------------------------- reading: windows, batches, Jev
@@ -718,6 +748,7 @@ def run_units(b, units, qmap, level):
     units = sorted(units, key=lambda u: u["unit_id"])
     batches = [units[i:i + BATCH_SIZE] for i in range(0, len(units), BATCH_SIZE)]
     for n, chunk in enumerate(batches, 1):
+        check_deadline()
         batch_id = f"{bid}-{level}-{n:03d}"
         todo = []
         for u in chunk:
@@ -913,14 +944,18 @@ def cmd_read(budget):
     sel = cmd_select()
     rows, _ = load_tracker()
     by = {r["biz_id"]: r for r in rows}
-    for r in sel:
-        bid = r["biz_id"]
-        cp = LP("coverage", f"{bid}.json")
-        if not os.path.exists(cp):
-            log_exception(bid, "read", "not_collected", "no coverage file; run collect first")
-            continue
-        out = read_business(by[bid], budget)
-        print(f'{bid}: read {out.get("item_units_answered", 0)}/{out.get("item_units", 0)} item units, status {out["status"]}')
+    try:
+        for r in sel:
+            bid = r["biz_id"]
+            if not os.path.exists(LP("coverage", f"{bid}.json")):
+                log_exception(bid, "read", "not_collected", "no coverage file; run collect first")
+                continue
+            out = read_business(by[bid], budget)
+            print(f'{bid}: read {out.get("item_units_answered", 0)}/{out.get("item_units", 0)} item units, status {out["status"]}')
+    except Paused:
+        print("PAUSED: time slice used up; progress is saved, run read again")
+    finally:
+        save_spend()
 
 
 # ---------------------------------------------------------------- scoring and status
@@ -1016,6 +1051,7 @@ if __name__ == "__main__":
     ap.add_argument("--budget-usd", type=float, default=5.0)
     ap.add_argument("--as", dest="why", choices=["mailed", "declined", "opted_out"])
     ap.add_argument("--confirm", action="store_true")
+    ap.add_argument("--fresh", action="store_true", help="collect: discard saved review pages and collect again")
     a = ap.parse_args()
     try:
         if a.cmd == "select":
@@ -1023,7 +1059,7 @@ if __name__ == "__main__":
         elif a.cmd == "estimate":
             cmd_estimate()
         elif a.cmd == "collect":
-            cmd_collect(a.budget_usd)
+            cmd_collect(a.budget_usd, a.fresh)
         elif a.cmd == "read":
             cmd_read(a.budget_usd)
         elif a.cmd == "score":
