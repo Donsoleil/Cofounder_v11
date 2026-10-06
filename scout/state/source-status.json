@@ -1,0 +1,6 @@
+{
+ "CSLB-MASTER": {
+  "first_logged_utc": "2026-10-06T01:19:07Z",
+  "reason": "Full CSLB License Master could not be downloaded from this environment: the portal stream was cut at about 24-28 MB, and later requests were refused with HTTP 403 / Request Rejected by CSLB's firewall. A partial file (24,117,248 bytes, whole rows only) is used in limited mode: a match found in it is real, but \"not found\" and \"license under 30 years\" stay review, never closed. To finish: download the License Master CSV by hand in a browser from https://www.cslb.ca.gov/onlineservices/dataportal/ContractorList and run: python3 -I scout/fetch.py import-cslb <file> \"<Updated as of ...>\""
+ }
+}

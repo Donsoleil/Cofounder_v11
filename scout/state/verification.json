@@ -1,0 +1,178 @@
+{
+ "verified_utc": "2026-10-06T01:29:44Z",
+ "as_of": "2026-10-06",
+ "passed": 34,
+ "failed": 0,
+ "checks": [
+  {
+   "check": "business IDs are unique and well formed (biz-NNN)",
+   "ok": true,
+   "detail": "166 IDs"
+  },
+  {
+   "check": "loan numbers are unique (no duplicated loans)",
+   "ok": true,
+   "detail": "201 loans"
+  },
+  {
+   "check": "every loan belongs to exactly one tracker business",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "tracker loan_count and loan_numbers equal the loans file",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "ID registry maps each loan to one active ID, matching the loans file",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "no two businesses share legal name + street + ZIP",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "every row has an eligibility_status and an outreach_status",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "source rows: raw recount equals pipeline count",
+   "ok": true,
+   "detail": "968,524 rows (968,525 physical lines incl. header)"
+  },
+  {
+   "check": "statewide matching loans: raw recount equals pipeline",
+   "ok": true,
+   "detail": "1,839"
+  },
+  {
+   "check": "county loans: raw recount equals loans file",
+   "ok": true,
+   "detail": "raw project-county count 201, loans file 201 (difference = ZIP-only cases flagged)"
+  },
+  {
+   "check": "every loans-file row exists in the raw SBA file",
+   "ok": true,
+   "detail": "0 missing"
+  },
+  {
+   "check": "loan name, amount, ZIP, NAICS and row number match the raw file for every loan",
+   "ok": true,
+   "detail": "0 mismatches"
+  },
+  {
+   "check": "no Orange County project-county loan was left out",
+   "ok": true,
+   "detail": "0 omitted"
+  },
+  {
+   "check": "draw is kept per loan (PPP=first, PPS=second)",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "payroll proxy = loan / 2.5 * 12 only for standard loans; otherwise unknown",
+   "ok": true,
+   "detail": "181 known, 20 unknown"
+  },
+  {
+   "check": "every registration record, date and name re-verifies against the raw CSLB file",
+   "ok": true,
+   "detail": "6 checked; []"
+  },
+  {
+   "check": "eligibility rules hold on every row (ready = verified 30+, closed = clear exclusion)",
+   "ok": true,
+   "detail": "[]"
+  },
+  {
+   "check": "every retirement-plan match re-verifies against the raw DOL row (EIN, plan ID, period, filing date, participants, benefit codes, name)",
+   "ok": true,
+   "detail": "55/55 filings re-read; problems: []"
+  },
+  {
+   "check": "plans are never summed: one primary plan per business, others listed separately",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "source ledger SHA-256 matches the files on disk for every source",
+   "ok": true,
+   "detail": "[]"
+  },
+  {
+   "check": "every ledger row has URL, retrieval date and reporting period",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "each unavailable or partial source appears once in the ledger and once in source-status",
+   "ok": true,
+   "detail": "{'CSLB-MASTER': 1}"
+  },
+  {
+   "check": "match ledger has an evidence URL and source ID on every row",
+   "ok": true,
+   "detail": "354 rows"
+  },
+  {
+   "check": "SBA encoding recorded (not valid UTF-8, decoded as cp1252)",
+   "ok": true,
+   "detail": "cp1252"
+  },
+  {
+   "check": "rerun #1 (unchanged inputs) completes",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "rerun keeps the same IDs, in the same order, with no new IDs",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "rerun preserves outreach_status, score and analyst columns exactly",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "rerun reproduces every identity, loan, registration and pension column byte for byte",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "rerun reproduces the loans file (no duplicated or dropped loans)",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "rerun keeps first-seen times in the ID registry",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "rerun #2 (one business unknown to the registry) completes",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "the unseen business receives exactly one new ID, above every existing ID",
+   "ok": true,
+   "detail": "new: ['biz-167']"
+  },
+  {
+   "check": "only the new ID is initialised outreach_status=ready; existing statuses untouched",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "existing businesses keep their IDs after the new business is added",
+   "ok": true,
+   "detail": ""
+  }
+ ]
+}

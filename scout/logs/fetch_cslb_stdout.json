@@ -1,0 +1,9 @@
+{
+ "id": "CSLB-MASTER",
+ "kind": "cslb",
+ "url": "https://www.cslb.ca.gov/onlineservices/dataportal/ContractorList",
+ "dest": "cslb/MasterLicenseData.csv",
+ "name": "California CSLB License Master (contractor licenses)",
+ "status": "unavailable",
+ "error": "OSError('HTTP 403')"
+}

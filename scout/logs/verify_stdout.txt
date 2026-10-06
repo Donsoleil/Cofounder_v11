@@ -1,0 +1,36 @@
+PASS  business IDs are unique and well formed (biz-NNN)  [166 IDs]
+PASS  loan numbers are unique (no duplicated loans)  [201 loans]
+PASS  every loan belongs to exactly one tracker business
+PASS  tracker loan_count and loan_numbers equal the loans file
+PASS  ID registry maps each loan to one active ID, matching the loans file
+PASS  no two businesses share legal name + street + ZIP
+PASS  every row has an eligibility_status and an outreach_status
+PASS  source rows: raw recount equals pipeline count  [968,524 rows (968,525 physical lines incl. header)]
+PASS  statewide matching loans: raw recount equals pipeline  [1,839]
+PASS  county loans: raw recount equals loans file  [raw project-county count 201, loans file 201 (difference = ZIP-only cases flagged)]
+PASS  every loans-file row exists in the raw SBA file  [0 missing]
+PASS  loan name, amount, ZIP, NAICS and row number match the raw file for every loan  [0 mismatches]
+PASS  no Orange County project-county loan was left out  [0 omitted]
+PASS  draw is kept per loan (PPP=first, PPS=second)
+PASS  payroll proxy = loan / 2.5 * 12 only for standard loans; otherwise unknown  [181 known, 20 unknown]
+PASS  every registration record, date and name re-verifies against the raw CSLB file  [6 checked; []]
+PASS  eligibility rules hold on every row (ready = verified 30+, closed = clear exclusion)  [[]]
+PASS  every retirement-plan match re-verifies against the raw DOL row (EIN, plan ID, period, filing date, participants, benefit codes, name)  [55/55 filings re-read; problems: []]
+PASS  plans are never summed: one primary plan per business, others listed separately
+PASS  source ledger SHA-256 matches the files on disk for every source  [[]]
+PASS  every ledger row has URL, retrieval date and reporting period
+PASS  each unavailable or partial source appears once in the ledger and once in source-status  [{'CSLB-MASTER': 1}]
+PASS  match ledger has an evidence URL and source ID on every row  [354 rows]
+PASS  SBA encoding recorded (not valid UTF-8, decoded as cp1252)  [cp1252]
+PASS  rerun #1 (unchanged inputs) completes
+PASS  rerun keeps the same IDs, in the same order, with no new IDs
+PASS  rerun preserves outreach_status, score and analyst columns exactly
+PASS  rerun reproduces every identity, loan, registration and pension column byte for byte
+PASS  rerun reproduces the loans file (no duplicated or dropped loans)
+PASS  rerun keeps first-seen times in the ID registry
+PASS  rerun #2 (one business unknown to the registry) completes
+PASS  the unseen business receives exactly one new ID, above every existing ID  [new: ['biz-167']]
+PASS  only the new ID is initialised outreach_status=ready; existing statuses untouched
+PASS  existing businesses keep their IDs after the new business is added
+
+34 passed, 0 failed

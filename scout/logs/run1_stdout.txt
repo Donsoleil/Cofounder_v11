@@ -1,0 +1,19 @@
+{
+ "business_groups": 166,
+ "loans": 201,
+ "eligibility": {
+  "review": 165,
+  "ready": 1
+ },
+ "registration": {
+  "unknown_partial_source": 160,
+  "probable": 2,
+  "verified": 4
+ },
+ "pension": {
+  "unknown_no_filing_found": 99,
+  "plan_found": 55,
+  "candidate_needs_review": 12
+ }
+}
+new ids this run: 166
