@@ -32,8 +32,17 @@ def find(obj, *keys):
     return None
 
 
-def install(lead, run_composio_tool, place_tool="SERPAPI_GOOGLE_MAPS_SEARCH"):
-    """Replace lead.serp_get and lead.jev_post. place_tool may be COMPOSIO_SEARCH_GOOGLE_MAPS if SerpApi is not connected."""
+OPENROUTER_ENDPOINTS = ("https://openrouter.ai/api/v1/systemone", "/api/v1/systemone", "/v1/systemone")
+
+
+def install(lead, run_composio_tool, place_tool="SERPAPI_GOOGLE_MAPS_SEARCH", proxy_execute=None, jev_route="jev"):
+    """Replace lead.serp_get and lead.jev_post.
+
+    place_tool may be COMPOSIO_SEARCH_GOOGLE_MAPS if SerpApi is not connected.
+    jev_route "jev": Composio's Jev toolkit (needs a TypeSafe key).
+    jev_route "openrouter": your OpenRouter key through Composio's openrouter connection. Composio has no System One tool
+    there, so the call goes through the workbench's proxy_execute to OpenRouter's /api/v1/systemone endpoint.
+    """
 
     def call(slug, args, tries=4):
         last = ""
@@ -79,17 +88,45 @@ def install(lead, run_composio_tool, place_tool="SERPAPI_GOOGLE_MAPS_SEARCH"):
         lead.jl_append(lead.LP("collector-log.jsonl"), dict(ts=lead.now(), via="composio", params=params, ok=True))
         return out
 
+    state = {"endpoint": None}
+
+    def via_openrouter(payload):
+        body = {"model": lead.OPENROUTER_MODEL, "state": payload["state"], "questions": payload["questions"]}
+        last = ""
+        order = [state["endpoint"]] if state["endpoint"] else list(OPENROUTER_ENDPOINTS)
+        for ep in order:
+            for i in range(4):
+                res, err = proxy_execute("POST", ep, "openrouter", body=body)
+                found = find(res, "answers") if res is not None else None
+                if found:
+                    state["endpoint"] = ep
+                    return found
+                last = str(err or json.dumps(res, default=str)[:300])
+                low = last.lower()
+                if "402" in low or "insufficient credits" in low:
+                    raise lead.Fatal("OpenRouter says insufficient credits; add credits, then rerun to resume")
+                if any(w in low for w in CONNECT_WORDS + ("401", "403")) and "answers" not in low:
+                    raise lead.Fatal(f"OpenRouter connection problem: {last[:200]}")
+                if any(w in low for w in ("429", "rate", "timeout", "overload", "529", "502", "503", "524")):
+                    time.sleep(2 ** i)
+                    continue
+                break   # wrong endpoint form or a bad request: try the next form
+        raise RuntimeError("OpenRouter System One call failed: " + last[:300])
+
     def jev_post(payload):
         try:
-            res = call("JEV_EVALUATE_STATE", {"model": payload["model"], "state": payload["state"], "questions": payload["questions"]})
+            if jev_route == "openrouter":
+                body = via_openrouter(payload)
+            else:
+                body = find(call("JEV_EVALUATE_STATE", {"model": payload["model"], "state": payload["state"], "questions": payload["questions"]}), "answers")
         except lead.Fatal:
             raise
         except RuntimeError as e:
             return 422, json.dumps({"error": str(e)})
-        body = find(res, "answers")
         if not body:
             return 422, json.dumps({"error": "no answers in Composio response"})
-        return 200, json.dumps({"model": body.get("model", ""), "answers": body["answers"], "usage": body.get("usage", {})})
+        return 200, json.dumps({"id": body.get("id", ""), "provider": body.get("provider", ""), "model": body.get("model", ""),
+                                "answers": body["answers"], "usage": body.get("usage", {})})
 
     lead.serp_get, lead.jev_post = serp_get, jev_post
     return serp_get, jev_post

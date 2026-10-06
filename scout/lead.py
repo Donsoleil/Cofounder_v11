@@ -35,7 +35,9 @@ from norm import STRONG, addr_level, confidence, name_match, name_variants, norm
 # ---- providers (official docs, checked 2026-10-06) --------------------------------------
 JEV_URL = "https://api.typesafe.ai/v1/systemone"      # docs.typesafe.ai/api.md
 SERP_URL = "https://serpapi.com/search.json"           # serpapi.com/google-maps-reviews-api
-KEY_SERP, KEY_JEV = "SERPAPI_API_KEY", "TYPESAFE_API_KEY"
+KEY_SERP, KEY_JEV, KEY_OPENROUTER = "SERPAPI_API_KEY", "TYPESAFE_API_KEY", "OPENROUTER_API_KEY"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/systemone"   # openrouter.ai/docs/api/api-reference/systemone/submit-a-system-one-request
+OPENROUTER_MODEL = "typesafe/jev-1.13"
 MODEL = "jev-latest"                                   # resolves to jev-1.13.0; resolved name is saved per response
 JEV_USD_PER_TOKEN = 0.042 / 1e6                        # $42 per billion input tokens, output free (docs.typesafe.ai/models.md)
 SERP_USD_PER_SEARCH = float(os.environ.get("SERPAPI_PRICE_PER_SEARCH_USD", "0.025"))  # Starter plan $25/1000; free plan = 0
@@ -183,9 +185,13 @@ def log_exception(biz_id, stage, reason, detail=""):
         S.write_csv(path, ["biz_id", "stage", "reason", "detail", "logged_utc"], rows)
 
 
+def _jev_usd(d):
+    return d.get("jev_reported_cost_usd") or d.get("jev_input_tokens", 0) * JEV_USD_PER_TOKEN   # OpenRouter reports usage.cost; else estimate from tokens
+
+
 def spend_usd():
     d = json.load(open(LP("spend.json"))) if os.path.exists(LP("spend.json")) else {}
-    return d.get("serp_searches", 0) * SERP_USD_PER_SEARCH + d.get("jev_input_tokens", 0) * JEV_USD_PER_TOKEN
+    return d.get("serp_searches", 0) * SERP_USD_PER_SEARCH + _jev_usd(d)
 
 
 def save_spend():
@@ -193,7 +199,7 @@ def save_spend():
     for k, v in SPEND.items():
         d[k] = d.get(k, 0) + v
     SPEND.clear()
-    d["usd_estimate"] = round(d.get("serp_searches", 0) * SERP_USD_PER_SEARCH + d.get("jev_input_tokens", 0) * JEV_USD_PER_TOKEN, 4)
+    d["usd_estimate"] = round(d.get("serp_searches", 0) * SERP_USD_PER_SEARCH + _jev_usd(d), 4)
     d["serp_usd_per_search_assumed"] = SERP_USD_PER_SEARCH
     jwrite(LP("spend.json"), d)
 
@@ -239,23 +245,35 @@ def serp_get(params):
     raise Fatal("SerpApi kept returning rate-limit or server errors")
 
 
+def jev_route():
+    """Direct route: a TypeSafe key if set, otherwise an OpenRouter key (both reach the same Jev model)."""
+    if os.environ.get(KEY_JEV):
+        return JEV_URL, KEY_JEV, MODEL
+    if os.environ.get(KEY_OPENROUTER):
+        return OPENROUTER_URL, KEY_OPENROUTER, OPENROUTER_MODEL
+    raise Fatal(f"set {KEY_JEV} or {KEY_OPENROUTER} (never printed)")
+
+
 def jev_post(payload):
     """One Jev call. Returns (http_status, raw_text). The key is added here and never logged."""
-    body = json.dumps(payload).encode()
-    hdr = {"Authorization": "Bearer " + secret(KEY_JEV), "Content-Type": "application/json"}
+    url, keyname, model = jev_route()
+    body = json.dumps(dict(payload, model=model)).encode()
+    hdr = {"Authorization": "Bearer " + secret(keyname), "Content-Type": "application/json"}
     for attempt in range(6):
         try:
-            status, raw, _ = _http(JEV_URL, data=body, headers=hdr, method="POST", timeout=60)
+            status, raw, _ = _http(url, data=body, headers=hdr, method="POST", timeout=60)
         except Exception as e:
             if attempt == 5:
-                return 0, scrub(repr(e), KEY_JEV)
+                return 0, scrub(repr(e), keyname)
             time.sleep(2 ** attempt)
             continue
-        if status in (429, 529, 500, 502, 503):
+        if status in (429, 529, 500, 502, 503, 524):
             time.sleep(2 ** attempt)
             continue
         if status == 401:
-            raise Fatal("Jev rejected the key (HTTP 401); check TYPESAFE_API_KEY")
+            raise Fatal(f"the Jev route rejected the key (HTTP 401); check {keyname}")
+        if status == 402:
+            raise Fatal("OpenRouter says insufficient credits (HTTP 402); add credits, then rerun to resume")
         return status, raw.decode("utf-8", "replace")
     return 0, "retries exhausted"
 
@@ -772,6 +790,7 @@ def run_units(b, units, qmap, level):
                         e["answers"], e["model_resolved"], e["usage"] = parsed["answers"], parsed.get("model", ""), parsed.get("usage", {})
                         with _lock:
                             SPEND["jev_input_tokens"] += int(parsed.get("usage", {}).get("input_tokens", 0))
+                            SPEND["jev_reported_cost_usd"] += float(parsed.get("usage", {}).get("cost", 0) or 0)
                         results[u["unit_id"]] = e
                     else:
                         failed.append(u["unit_id"])

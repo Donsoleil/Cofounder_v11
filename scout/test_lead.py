@@ -179,9 +179,26 @@ def fake_run_composio_tool(slug, args):
     raise AssertionError(slug)
 
 
-if MODE == "composio":
+def fake_proxy_execute(method, endpoint, toolkit, query_params=None, body=None, headers=None):
+    """Stands in for the workbench proxy_execute to OpenRouter. First endpoint form is rejected, to exercise the fallback."""
+    assert method == "POST" and toolkit == "openrouter" and body["model"] == "typesafe/jev-1.13"
+    if endpoint.startswith("https://"):
+        return {"status": 404, "data": {"error": "Resource not found"}}, ""
+    st, text = fake_jev({"model": body["model"], "state": body["state"], "questions": body["questions"]})
+    if st != 200:
+        return {"status": 400, "data": {"error": "Invalid request parameters"}}, ""
+    d = json.loads(text)
+    d.update(id="gen-dec-test", provider="TypeSafe", model="typesafe/jev-1.13-20260917")
+    d["usage"]["cost"] = 0.000019992
+    return {"status": 200, "data": d}, ""
+
+
+if MODE in ("composio", "openrouter"):
     import composio_transport
-    composio_transport.install(lead, fake_run_composio_tool)
+    if MODE == "openrouter":
+        composio_transport.install(lead, fake_run_composio_tool, proxy_execute=fake_proxy_execute, jev_route="openrouter")
+    else:
+        composio_transport.install(lead, fake_run_composio_tool)
 else:
     def counted_serp(p):
         lead.SPEND["serp_searches"] += 1
@@ -231,7 +248,7 @@ res_c = json.load(open(lead.LP("results", "biz-903.json")))
 T("a failed model call is recorded, not hidden", len(res_c["failed"]) >= 1, str(res_c["failed"]))
 T("Jev probabilities kept in their own file", os.path.exists(lead.LP("jev-probabilities", "biz-901.csv")))
 bf = [e for fn in os.listdir(lead.LP("batches", "biz-901")) for e in lead.jl_read(os.path.join(lead.LP("batches", "biz-901"), fn))]
-T("raw responses, requests, batch and item IDs saved for every call", all(e["raw_response"] and e["request"] and e["batch_id"] and e["item_id"] for e in bf) and all(e["model_resolved"] == "jev-1.13.0" for e in bf if e["status"] == "ok"), f"{len(bf)} calls")
+T("raw responses, requests, batch and item IDs saved for every call", all(e["raw_response"] and e["request"] and e["batch_id"] and e["item_id"] for e in bf) and all("jev-1.13" in e["model_resolved"] for e in bf if e["status"] == "ok"), f"{len(bf)} calls")
 n2 = len(JEV_CALLS)
 lead.cmd_read(5.0)
 again = JEV_CALLS[n2:]
@@ -264,6 +281,9 @@ if shutil.which("pdftotext"):
     import subprocess
     txt = subprocess.run(["pdftotext", os.path.join(TMP, "letters.pdf"), "-"], capture_output=True, text=True).stdout
     T("PDF text extracts and contains the greeting and sender", "Dear Maria Lopez," in txt and "Test Buyer" in txt)
+if MODE == "openrouter":
+    sp = json.load(open(lead.LP("spend.json")))
+    T("OpenRouter's reported usage.cost is what the spend ledger uses", sp.get("jev_reported_cost_usd", 0) > 0 and abs(lead.spend_usd() - (sp["serp_searches"] * lead.SERP_USD_PER_SEARCH + sp["jev_reported_cost_usd"])) < 1e-9, str({k: sp[k] for k in ("jev_reported_cost_usd", "usd_estimate")}))
 print("== verify")
 rc = lead_verify.main()
 T("independent verification passes", rc == 0)
