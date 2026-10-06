@@ -20,7 +20,7 @@ If you run this in a chat tool that cannot run code, open files or reach the int
 
 **Two sources did not work from the build session, and the reasons are logged once in `scout/state/source-status.json`:**
 
-1. **CSLB License Master (contractor licenses).** The portal's download stream was cut at roughly 24 to 28 MB (it never finished), and later requests got HTTP 403 from CSLB's firewall. I did not try to get around the firewall. A browser download on a normal connection should work. See section 8.
+1. **CSLB License Master (contractor licenses).** My own download was cut at roughly 24 to 28 MB and then blocked by CSLB's firewall (HTTP 403); I did not try to get around it. You downloaded the full file by hand on 2026-10-06 and it is kept in the repo at `scout/data/cslb/MasterLicenseData.csv` (243,786 licenses, 77,643,341 bytes, sha256 `19f530e7d66b76ce47931599ef342072b4e18232950eaf28edd76847be9b8da4`). The portal's own "updated as of" date was not provided, so the as-of in `scout/data/cslb/MasterLicenseData.csv.asof` is the latest `LastUpdate` in the file (10/4/2026).
 2. **California Secretary of State (SOS) charter dates.** bizfile Online sits behind a bot challenge, and SOS sells bulk data. SOS's own help guide says a BE Bulk Order "Master Unload" is $100 per unload through a bizfile account, and weekly unloads are free ([guide, section 19](https://bpd.cdn.sos.ca.gov/ucc/ucc-online-help.pdf)). That needs your account and payment, so it is not used. No parser exists for it yet because no sample file has been seen.
 
 ## 2. Run it
@@ -105,7 +105,7 @@ Edit the constants at the top of `scout/scout.py` (`REGION`, `STATE`, `COUNTY`, 
 
 ## 8. Unfinished work and how to finish it
 
-1. **Full CSLB file.** In a browser open https://www.cslb.ca.gov/onlineservices/dataportal/ContractorList, pick "License Master", download the CSV, then run `python3 -I scout/fetch.py import-cslb <file> "Updated as of M/D/YYYY"` (use the date the page shows) and `python3 -I scout/scout.py run`. Until then the scout runs on a partial file in limited mode: a match in it is real, but "not found" and "license under 30 years" stay review and never close. The partial file holds licenses issued 2015 to 2026 and 18 from the 1930s and 1940s, and none from 1950 to 2014, so almost all 30-year-old businesses show as unknown.
+1. **Full CSLB file: done (2026-10-06).** In any new session, load it before running the scout: `python3 -I scout/fetch.py import-cslb scout/data/cslb/MasterLicenseData.csv "$(cat scout/data/cslb/MasterLicenseData.csv.asof)"`, then `python3 -I scout/scout.py run --skip-fetch`. To refresh it, download "License Master" again from https://www.cslb.ca.gov/onlineservices/dataportal/ContractorList in a browser, replace the two files in `scout/data/cslb/` and import as above. Result with the full file: 166 businesses, 30 ready (30+ year license verified), 31 closed (license under 30 years), 105 in review (84 of them have no CSLB license matching both name and address; not yet investigated). Of the 30 ready, 29 are selectable for the evidence stage because biz-151 is now in review. The license date is the original license issue date, not the owner's age or a charter date.
 2. **SOS charter dates.** Optional second route for sole-proprietor-free entities: buy a bizfile BE Master Unload ($100) and add a parser once you have a sample. Not built.
 3. **Loan-level payroll verification** is limited to what the SBA file shows.
 4. **EINs** are not in the SBA or CSLB data. Supply `ein_known` where you have an independent source.

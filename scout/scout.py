@@ -902,7 +902,7 @@ def build_source_ledger(results, sba, cslb, dol_stats, cinfo):
             if cinfo["state"] != "missing":
                 f_ = cinfo["file"]
                 sha = fetch.sha256_file(f_)
-                rec.update(sha256=sha, bytes=os.path.getsize(f_), status=cinfo["state"],
+                rec.update(sha256=sha, bytes=os.path.getsize(f_), status="ok" if cinfo["state"] == "complete" else cinfo["state"],
                            first_retrieved_utc=old.get((sid, sha), {}).get("first_retrieved_utc") or first_retrieved(sid, sha))
                 st_ = cslb["stats"]
                 dec = ", ".join(f'{k[7:]}: {v:,}' for k, v in sorted(st_.items()) if k.startswith("issued_"))
