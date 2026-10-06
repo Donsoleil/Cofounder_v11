@@ -161,6 +161,7 @@ def fake_jev(payload):
     return 200, json.dumps(dict(model="jev-1.13.0", answers=ans, usage=dict(input_tokens=max(1, len(json.dumps(payload)) // 4), output_tokens=20)))
 
 
+ORIG_JEV_POST = lead.jev_post
 MODE = os.environ.get("LEAD_TEST_TRANSPORT", "direct")
 
 
@@ -301,6 +302,41 @@ except lead.Fatal:
     T("closed cannot move back", True)
 leak = [dp for dp, _, fs in os.walk(TMP) for f in fs if "TESTKEY" in open(os.path.join(dp, f), encoding="utf-8", errors="ignore").read()]
 T("dummy API keys appear in no saved file", not leak, str(leak[:2]))
+print("== direct OpenRouter route (jev_post itself)")
+seen = []
+real_http = lead._http
+
+
+def fake_http(url, data=None, headers=None, method=None, timeout=60):
+    body = json.loads(data)
+    seen.append((url, body["model"], headers.get("Authorization", "")[:6]))
+    if body["model"] == "typesafe/jev-1.13":
+        return 400, json.dumps({"error": {"message": "model not found"}}).encode(), {}
+    return 200, json.dumps({"model": "typesafe/jev-1.13-20260917", "answers": {}, "usage": {"input_tokens": 1}}).encode(), {}
+
+
+lead._http = fake_http
+saved = os.environ.pop("TYPESAFE_API_KEY", None)
+os.environ["OPENROUTER_API_KEY"] = "TESTKEY-openrouter-0000"
+lead._OR_MODELS[:] = ["typesafe/jev-1.13", "jev-latest", "~typesafe/jev-latest"]
+st, _ = ORIG_JEV_POST({"state": "x", "questions": {}})
+T("OpenRouter route uses the OpenRouter URL and falls back to the next documented model slug", st == 200 and [s_[1] for s_ in seen] == ["typesafe/jev-1.13", "jev-latest"] and seen[0][0].startswith("https://openrouter.ai/api/v1/systemone"), str(seen))
+seen.clear()
+ORIG_JEV_POST({"state": "x", "questions": {}})
+T("the model slug that worked is remembered", [s_[1] for s_ in seen] == ["jev-latest"])
+lead._http = lambda *a, **k: (402, b"{}", {})
+try:
+    lead._model_that_worked.clear()
+    ORIG_JEV_POST({"state": "x", "questions": {}})
+    T("insufficient credits stops the run with a clear message", False)
+except lead.Fatal as e:
+    T("insufficient credits stops the run with a clear message", "credits" in str(e))
+lead._http = real_http
+os.environ.pop("OPENROUTER_API_KEY", None)
+if saved:
+    os.environ["TYPESAFE_API_KEY"] = saved
+leak = [dp for dp, _, fs in os.walk(TMP) for f in fs if "TESTKEY-openrouter" in open(os.path.join(dp, f), encoding="utf-8", errors="ignore").read()]
+T("OpenRouter dummy key appears in no saved file", not leak)
 print(f"\n{sum(RESULTS)} passed, {len(RESULTS) - sum(RESULTS)} failed")
 (print("kept:", TMP) if os.environ.get("SCOUT_KEEP") else shutil.rmtree(TMP, ignore_errors=True))
 sys.exit(0 if all(RESULTS) else 1)

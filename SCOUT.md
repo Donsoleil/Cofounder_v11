@@ -128,6 +128,8 @@ Picks up from `scout-tracker.csv`. This part owns the evidence, score, draft and
 
 **Where the work runs.** Composio's remote workbench is a persistent Python 3.13 sandbox with open internet access and a preloaded `run_composio_tool` helper. The network stages (collect and read) run there, so raw responses and fetched pages stay on its disk instead of passing through chat. Cells have a hard 180-second limit; the pipeline pauses itself at about 150 seconds, saves everything, and the next cell resumes without repeating any call. Afterwards the evidence folder is zipped, uploaded with `upload_local_file`, and downloaded here (tested: a workbench upload downloads cleanly with `curl -L`). Ranking, letters and verification then run locally.
 
+**What happened when this was tried (2026-10-06).** SerpApi through Composio worked (place search and paged reviews, 3 searches). Jev through your OpenRouter key did not: Composio refused `proxy_execute` for the `openrouter` toolkit with code 4327, "Proxy execution is disabled for toolkit 'openrouter' because it has a tool enable or disable list". Composio's docs say proxy calls follow the session's toolkit enable and disable lists ([proxy execute](https://docs.composio.dev/docs/extending-sessions/proxy-execute)); that list is part of how your Composio session is configured, so it cannot be changed from inside this runbook. No workaround was attempted. Composio's chat-completion tool for OpenRouter is not a substitute: Jev is not a chat model and returns no probabilities there.
+
 **Jev routes, pick one.** (1) OpenRouter key via Composio `openrouter` + `proxy_execute` (selected; `jev_route="openrouter"`). (2) TypeSafe key via Composio `jev` (`jev_route="jev"`, tool `JEV_EVALUATE_STATE`). (3) Direct HTTP with `OPENROUTER_API_KEY` or `TYPESAFE_API_KEY` in the environment. All three reach the same model and return the same Choice answers.
 
 **Two differences from calling the APIs directly.** Composio returns each tool's parsed JSON, so the "raw response" saved for each model call is that JSON (model, answers, probabilities, usage), not the HTTP bytes. And the review count to reconcile still comes from `place_info.reviews`.
@@ -190,6 +192,19 @@ python3 -I scout/test_lead.py
 4. In each cell set `lead.DEADLINE = time.time() + 150`, then call `lead.cmd_collect(5.0)` and `lead.cmd_read(5.0)`. A `PAUSED` line means run the same cell again.
 5. Zip `/mnt/files/oc/scout/lead`, `upload_local_file` it, download the link with `curl -L` here, and unzip over `scout/lead/`.
 6. Locally: `lead.py score`, `draft`, `verify`.
+
+### 12c. Resume in a new session (Jev read through `OPENROUTER_API_KEY`)
+
+Chosen on 2026-10-06 after Composio refused the OpenRouter proxy call. SerpApi stays on Composio; only the Jev read goes direct. Environment settings reach a new session only, and `scout/lead/` is git-ignored, so the new session starts without the collected evidence and collects it again (about 3 SerpApi searches).
+
+1. Add `OPENROUTER_API_KEY` in the cloud environment's settings (the environment menu in the session title bar, then Edit; API credentials where offered, otherwise an environment variable), then start a new session. Never paste the key into chat.
+2. Check the name only: `python3 -I - <<'PY'` with `import os; print(bool(os.environ.get("OPENROUTER_API_KEY")))` and `PY`. Never print the value.
+3. `python3 -I scout/lead.py select` then `estimate`.
+4. Collect through Composio's workbench (SerpApi connection, no Jev needed): pull the code from `main` with the raw GitHub URLs, set `SCOUT_HOME=/mnt/files/oc`, `import lead, composio_transport`, `composio_transport.install(lead, run_composio_tool)`, set `lead.DEADLINE = time.time() + 150`, run `lead.cmd_collect(5.0)`, zip `/mnt/files/oc/scout/lead`, `upload_local_file`, then `curl -L` the link here and unzip into `scout/`.
+5. Read locally: `python3 -I scout/lead.py read --budget-usd 5`. With only `OPENROUTER_API_KEY` set, the call goes to `https://openrouter.ai/api/v1/systemone`. OpenRouter's public model list shows `typesafe/jev-router` but not `typesafe/jev-1.13`, so the call tries the slugs OpenRouter's docs give, in order (`typesafe/jev-1.13`, `jev-latest`, `~typesafe/jev-latest`), and remembers the one that works; `OPENROUTER_JEV_MODEL` forces a slug. This sandbox can reach `openrouter.ai` (checked: the path answers 401 without a key).
+6. `python3 -I scout/lead.py score`, then `verify`. After `scout/lead/sender.json` is filled in, `draft`.
+
+An exception row `jev_route_unavailable` for biz-151 from the Composio attempt is not carried over, because the new session starts clean.
 
 Composio schemas checked 2026-10-06: `SERPAPI_LIST_GOOGLE_MAPS_REVIEWS` takes `place_id` or `data_id`, `sort_by`, `next_page_token`, `review_count` (1 to 20) and `language`, and returns `reviews`, `place_info` and `serpapi_pagination`; `JEV_EVALUATE_STATE` takes `model`, `state` and `questions` and returns `model`, `answers` (Choice answers carry `choice`, `probabilities`, `confidence`) and `usage`. A one-business lookup through Composio's built-in Google Maps search showed Maps lists a website and a review total, and returns reviewer names inside `user_reviews`; the pipeline stores none of that.
 
