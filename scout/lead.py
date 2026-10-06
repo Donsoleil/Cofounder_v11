@@ -245,20 +245,21 @@ def serp_get(params):
     raise Fatal("SerpApi kept returning rate-limit or server errors")
 
 
+_OR_MODELS = ([os.environ["OPENROUTER_JEV_MODEL"]] if os.environ.get("OPENROUTER_JEV_MODEL")
+              else [OPENROUTER_MODEL, "jev-latest", "~typesafe/jev-latest"])   # slugs OpenRouter's docs give for System One
+_model_that_worked = {}
+
+
 def jev_route():
     """Direct route: a TypeSafe key if set, otherwise an OpenRouter key (both reach the same Jev model)."""
     if os.environ.get(KEY_JEV):
-        return JEV_URL, KEY_JEV, MODEL
+        return JEV_URL, KEY_JEV, [MODEL]
     if os.environ.get(KEY_OPENROUTER):
-        return OPENROUTER_URL, KEY_OPENROUTER, OPENROUTER_MODEL
+        return OPENROUTER_URL, KEY_OPENROUTER, _OR_MODELS
     raise Fatal(f"set {KEY_JEV} or {KEY_OPENROUTER} (never printed)")
 
 
-def jev_post(payload):
-    """One Jev call. Returns (http_status, raw_text). The key is added here and never logged."""
-    url, keyname, model = jev_route()
-    body = json.dumps(dict(payload, model=model)).encode()
-    hdr = {"Authorization": "Bearer " + secret(keyname), "Content-Type": "application/json"}
+def _post_with_retries(url, body, hdr, keyname):
     for attempt in range(6):
         try:
             status, raw, _ = _http(url, data=body, headers=hdr, method="POST", timeout=60)
@@ -276,6 +277,24 @@ def jev_post(payload):
             raise Fatal("OpenRouter says insufficient credits (HTTP 402); add credits, then rerun to resume")
         return status, raw.decode("utf-8", "replace")
     return 0, "retries exhausted"
+
+
+def jev_post(payload):
+    """One Jev call. Returns (http_status, raw_text). The key is added here and never logged.
+    On OpenRouter, a 'model not found' style answer tries the next documented slug and remembers the one that works."""
+    url, keyname, models = jev_route()
+    hdr = {"Authorization": "Bearer " + secret(keyname), "Content-Type": "application/json"}
+    order = [_model_that_worked[url]] if url in _model_that_worked else list(models)
+    st, text = 0, ""
+    for i, model in enumerate(order):
+        st, text = _post_with_retries(url, json.dumps(dict(payload, model=model)).encode(), hdr, keyname)
+        if st == 200:
+            _model_that_worked[url] = model
+            return st, text
+        wrong_model = st in (400, 404) and "model" in text.lower() and i < len(order) - 1
+        if not wrong_model:
+            return st, text
+    return st, text
 
 
 # ---------------------------------------------------------------- tracker + selection
