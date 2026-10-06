@@ -242,7 +242,7 @@ A yes needs the quote. A no needs an explicit contradiction quote. Yes and no to
 
 ## 15. Unfinished in part 2
 
-1. **No live run yet.** The Composio connections for SerpApi and Jev still need your key entered at Composio, and the sender details have not been supplied, so nothing has been collected or drafted. The offline test covers the mechanics only.
+1. **Live pilot done for biz-151 (2026-10-06); no letter yet.** SerpApi ran through Composio (3 searches), Jev ran directly through `OPENROUTER_API_KEY`. OpenRouter rejected the slug `typesafe/jev-1.13` and accepted `jev-latest`, which resolved to `typesafe/jev-1.13-20260917` (provider TypeSafe); the dated model is stored with every call. Result: coverage partial (Google reports 9 reviews, 6 were returned, gap 3), 5 readable items read in 5 calls (4 reviews with text and the home page), every answer `unknown` with probability 0.92 or higher, so no quote, no score, no rank, and the business stays in `review`. Spend: 5,364 Jev input tokens, $0.000225 as reported by OpenRouter, plus 3 SerpApi searches at an assumed $0.025 each, about $0.075 of the $5 budget. The sender details have not been supplied, so `draft` stopped as designed and no letter exists. The three missing reviews are unexplained (sorting by another order might return them; not tried).
 2. Still unconfirmed: the shape of an owner reply on a review. (Settled by a live lookup: Maps place results do carry a `website`.)
 3. Third-party sites may block the web-page fetch; blocked pages are logged as exceptions, not retried around.
 4. A model other than Jev needs its own adapter.
