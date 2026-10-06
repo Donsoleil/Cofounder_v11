@@ -1,0 +1,12 @@
+HTTP/1.1 200 Connection Established
+
+HTTP/2 200 
+date: Tue, 06 Oct 2026 00:44:35 GMT
+content-type: application/x-zip-compressed
+content-length: 131128075
+last-modified: Wed, 30 Sep 2026 16:24:31 GMT
+accept-ranges: bytes
+etag: "cb7e5f2cf850dd1:0"
+server: 
+strict-transport-security: max-age=31536000; includeSubDomains; preload
+

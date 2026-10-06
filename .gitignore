@@ -1,0 +1,9 @@
+*.pyc
+.DS_Store
+__pycache__/
+letters.md
+letters.pdf
+mailing-list.csv
+scout/cache/
+scout/lead/
+scout/raw/
