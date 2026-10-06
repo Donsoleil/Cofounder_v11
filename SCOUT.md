@@ -110,3 +110,106 @@ Edit the constants at the top of `scout/scout.py` (`REGION`, `STATE`, `COUNTY`, 
 3. **Loan-level payroll verification** is limited to what the SBA file shows.
 4. **EINs** are not in the SBA or CSLB data. Supply `ein_known` where you have an independent source.
 5. The CSLB retry policy waits 6 hours after a failed attempt, so a rerun never hammers their firewall.
+
+---
+
+# Part 2: evidence, ranking and letters
+
+Picks up from `scout-tracker.csv`. This part owns the evidence, score, draft and `outreach_status` columns. Everything here is Orange County only because the tracker is.
+
+## 9. Choices and connections
+
+| Choice | Selected | Reads its key from |
+|---|---|---|
+| Evidence model | Jev (TypeSafe AI, System One) | `TYPESAFE_API_KEY` (the name Jev's own SDK uses) |
+| Review collector | SerpApi, Google Maps Reviews engine | `SERPAPI_API_KEY` |
+
+Composio also lists Jev and SerpApi toolkits, but neither has an active connection on this account. This runbook uses environment variables instead, because the scripts must write raw responses to disk themselves; passing 100 KB of review JSON through a chat window to be re-typed into a file would risk exactly the truncation and edits this job forbids.
+
+**How the keys get in.** Add the two variables in the cloud environment's settings (the environment menu in the session's title bar, then Edit; under API credentials where that section is offered, otherwise as environment variables). A new session picks them up. Never paste a key into chat. The scripts read them with `os.environ`, never print them, never save them, and scrub them from error messages. The tests plant dummy keys and prove they appear in no saved file.
+
+## 10. What the official docs say (checked 2026-10-06)
+
+| Fact | Source |
+|---|---|
+| Google's own Places API returns "a maximum of 5 reviews", sorted by relevance, with no paging. So it cannot collect every review, and the Composio Google Maps tool (which wraps it) is not used. | [Places API reference](https://developers.google.com/maps/documentation/places/web-service/reference/rest/v1/places) |
+| SerpApi reviews engine: `engine=google_maps_reviews` with `place_id` or `data_id`; first page returns 8; later pages use `next_page_token` plus the original parameters, and `num` up to 20; `sort_by` accepts `qualityScore`, `newestFirst`, `ratingHigh`, `ratingLow`; each review has `review_id`, `link`, `rating`, `date`, `iso_date`, `snippet`, `likes` and a `user` object (profile, which this scout discards); `place_info.reviews` is the total, used to reconcile. | [Reviews API](https://serpapi.com/google-maps-reviews-api) |
+| SerpApi place search: `engine=google_maps&type=search&q=...`; one place: `type=place&place_id=...`. Items carry `data_id`, `place_id`, `title`, `address`, `phone`, `rating`, `reviews`. | [Google Maps API](https://serpapi.com/google-maps-api) |
+| SerpApi billing: only successful searches count; cached, errored and failed ones do not; a page of 100 results and an empty one each count as 1. Plans: Free $0 for 250 searches a month, Starter $25 for 1,000, Developer $75 for 5,000. | [Pricing](https://serpapi.com/pricing) |
+| Jev: `POST https://api.typesafe.ai/v1/systemone`, header `Authorization: Bearer <key>`, body `model` (`jev-latest`, which resolves to `jev-1.13.0`), `state`, and `questions` (each with `type`, `instructions`, and for Choice a `criteria` map of up to 255 options). | [API](https://docs.typesafe.ai/api.md), [Models](https://docs.typesafe.ai/models.md) |
+| Jev Choice answer: `choice`, the full `probabilities` map over every option, and `confidence`; the response also has `usage.input_tokens`. Errors: 401 bad key, 422 invalid request, 429 rate limit, 529 overloaded. | [Choice](https://docs.typesafe.ai/primitives/choice.md), [API](https://docs.typesafe.ai/api.md) |
+| Jev limits: 64K context, 32K tokens for state plus the longest question, text only; $42 per billion input tokens ($0.042 per million), output free; 100K tokens per second and 80 requests per second (dynamic). | [Models](https://docs.typesafe.ai/models.md) |
+| Jev weaknesses: accuracy falls when the state holds unrelated detail; it reads instructions literally; **it leans toward the first-listed Choice option**. | [Jev 1.13 limits](https://docs.typesafe.ai/model-jaggedness/jev-1.13.md) |
+| Jev confidence is a statistic of one model's probability shape. The docs say nothing about comparing it across models, so this scout never does. | [Confidence](https://docs.typesafe.ai/confidence.md) |
+
+Not confirmed from the docs I could read: whether SerpApi place results include a `website` key, and the shape of an owner reply on a review. The code handles both when present and falls back to a second `type=place` lookup for the website. The first live run will show which is true; treat this as open until then. Jev's docs give no limit on questions per call; this scout sends 4.
+
+## 11. Cost model and the $5 pilot gate
+
+| Item | Rate | Source |
+|---|---|---|
+| SerpApi search | `SERPAPI_PRICE_PER_SEARCH_USD`, default $0.025 (the Starter plan rate; the Free plan's first 250 a month cost $0 extra) | pricing page |
+| Jev input | $0.042 per million tokens, output free | models page |
+
+Per business: SerpApi searches = 2 (place search, place lookup) + 1 + ceil((reviews - 8) / 20) review pages. Jev tokens are bounded above by assuming state is billed once per question (4 questions per read). For the one ready business, `estimate` prints:
+
+| Scenario | SerpApi searches | Jev tokens | Estimate |
+|---|---|---|---|
+| 50 reviews | 6 | 87,587 | $0.154 |
+| 150 reviews | 11 | 237,158 | $0.285 |
+| 500 reviews | 28 | 760,658 | $0.732 |
+
+These are estimates, not quotes: the review count is unknown until the place is matched, and SerpApi's per-search price depends on your plan. The pilot budget defaults to $5 and is **cumulative** across resumes (`scout/lead/spend.json`). Before collecting or reading a business, the scout projects its cost; if that would pass the budget, it does not run and records `budget_exceeded` in `scout/lead/exceptions.csv`. Report the actual spend before scaling up.
+
+## 12. Run it
+
+```bash
+python3 -I scout/lead.py select
+python3 -I scout/lead.py estimate
+python3 -I scout/lead.py run --budget-usd 5
+python3 -I scout/lead.py draft
+python3 -I scout/lead.py verify
+python3 -I scout/lead.py close biz-151 --as mailed --confirm
+python3 -I scout/test_lead.py
+```
+
+`run` is select, estimate, collect, read, score. `test_lead.py` is an offline end-to-end test with a mock model and mock collector; it uses only labelled SAMPLE data in a temp folder, and says nothing about Jev's accuracy.
+
+## 13. Rules
+
+**Selection.** `eligibility_status=ready` and `outreach_status=ready`, not in `scout/lead/suppression.csv` (matched by business ID, or by name plus street). `closed` is never reselected. The suppression file starts empty; add opt-outs and prior contacts to it.
+
+**Matching.** The Maps place must match the business name and the street address. Same name at another address is rejected as a namesake. A suffix-only difference (Inc, LLC) with the same street counts, because Maps titles drop suffixes; same words only does not. The website comes from the Maps listing and is accepted only if its home page contains the business name plus the street number and name, the phone, or the ZIP. No match is an exception, never a guess.
+
+**Reviews.** Pages are followed until the token runs out. Reconciliation is stored: fetched (review objects received), unique (distinct `review_id`), reported (`place_info.reviews`). Any gap, or a page cap, means partial coverage and the business stays in review. Reviewer profiles, photos and ratings details are dropped before anything is saved. Kept per review: stable item ID, `review_id`, URL, date, rating, full text, and the business's own reply (read and quotable).
+
+**Pages.** The home page, then one existing About, Team and Services page each, found from home-page links first and standard paths second. `robots.txt` is honoured. Each fetch attempt is logged; pages that do not exist are logged as such, not invented.
+
+**Reading.** Every item is read in full by Jev, in windows of 8,000 characters with 800 overlap, in batches of 25 calls (a call is one window with four Choice questions). Options are listed with `unknown` first, to offset Jev's bias toward the first option. Every call saves its batch ID, item ID, full request, raw response, resolved model and token usage. Probabilities are also written separately to `scout/lead/jev-probabilities/`. Failed calls are recorded and retried on the next run; a business with an unanswered call is partial. Unchanged items are never re-read (keyed by text hash, question set and model).
+
+**Quotes.** Jev returns a choice and probabilities, not passages. When a window looks like a yes or no, the scout re-asks sentence by sentence, takes the best sentence as the quote, and validates it: the quote must appear exactly in the saved text, and a gate must pass.
+- Owner doing work: the owner is the grammatical subject of a trade verb, with no negation and nobody else (a technician) in between, or "personally" and "himself" next to the owner.
+- Named successor: a succession phrase, a named person, and the owner in context.
+- Retirement: the retirement belongs to the owner. A writer saying "as a retired teacher" or a founder who retired in 1995 does not count.
+- Owner identity: a full name presented in the present tense as owner, owner-operator or proprietor. A founder alone, a past tense, a technician or a first name alone does not count. Two different names means unknown.
+
+A yes needs the quote. A no needs an explicit contradiction quote. Yes and no together, or neither, means unknown. Provider confidence is saved but never compared across providers. For a model other than Jev, add an adapter that requests structured labels (verdict plus a quote copied from the text); the same exact-quote and gate checks apply.
+
+**Score.** For a complete record only: `60*retirement + 40*owner_work - 20*successor`, each variable 1 only for a quote-verified yes. At least one of owner work or retirement must be supported. This orders a list; it is not a sale probability. Unsupported, partial or failed records stay `review`.
+
+**Status.** `ready` to `scored` to `drafted` to `closed`; exceptions go to `review`. `closed` happens only through `close ... --confirm`, which you run after the owner of the tracker confirms mailed, declined or opted out; an opt-out also goes into the suppression file. Reruns never repeat a finished stage.
+
+**Letters.** Up to 50 supported businesses, best rank first. Each has one verified detail (an exact sentence from the business's own saved web page, else a verified licence fact), the sender's interest, and a request for a short conversation. It never says or implies that the owner wants to sell or retire; any intent word in the generated text, or in the sender's own text, stops the draft. Unknown owner is "Business owner". An address not verified at street level sends the business to review and keeps it off the mailing list. With no leads, the mailing list is empty and any sample page is labelled "SAMPLE - NOT FOR MAILING". Outputs: `letters.pdf`, `letters.md`, `mailing-list.csv`, all by business ID. You review, print, sign and post. Those three files and the evidence state in `scout/lead/` stay out of git (they hold your address and third-party review text); tell me if you want them versioned on a private branch.
+
+**Sender file.** The draft stage needs `scout/lead/sender.json` with `name`, `return_address` (a list of lines, ending with city, state and ZIP), `contact`, `buyer_background` (your own truthful sentences) and `interest`. The scout will not invent any of it.
+
+## 14. Verification
+
+`lead.py verify` checks: every selected ID has a result or an exception; every item is read exactly once and every batch answered (or its business is flagged partial); review counts re-derived from the saved pages; no reviewer profile, key or auth header in any saved file; every model call kept its raw response; every quote is exact and passes its gate; score arithmetic and ranking; the status flow; letter addresses and addressees against the tracker; no intent words in letters. Counts are derived from IDs and files, not from what the pipeline printed. Shared owner context may repeat across items; that is allowed.
+
+## 15. Unfinished in part 2
+
+1. **No live run yet.** Both keys are missing from this environment, and the sender details have not been supplied, so nothing has been collected or drafted. The offline test covers the mechanics only.
+2. The two items marked unconfirmed in section 10 (SerpApi `website` key, owner-reply shape).
+3. Third-party sites may block the web-page fetch; blocked pages are logged as exceptions, not retried around.
+4. A model other than Jev needs its own adapter.
