@@ -185,6 +185,14 @@ def log_exception(biz_id, stage, reason, detail=""):
         S.write_csv(path, ["biz_id", "stage", "reason", "detail", "logged_utc"], rows)
 
 
+def clear_exception(biz_id, stage, reason):
+    path = LP("exceptions.csv")
+    rows, _ = S.read_csv(path)
+    keep = [r for r in rows if not (r["biz_id"] == biz_id and r["stage"] == stage and r["reason"] == reason)]
+    if len(keep) != len(rows):
+        S.write_csv(path, ["biz_id", "stage", "reason", "detail", "logged_utc"], keep)
+
+
 def _jev_usd(d):
     return d.get("jev_reported_cost_usd") or d.get("jev_input_tokens", 0) * JEV_USD_PER_TOKEN   # OpenRouter reports usage.cost; else estimate from tokens
 
@@ -352,6 +360,26 @@ def cmd_select():
     return sel
 
 
+PILOT_LIMIT = None
+
+
+def limited(sel):
+    """Pilot cap (--limit N): keep the N businesses with the oldest license date. The rest stay selected but are recorded as
+    exceptions (not executed), never silently dropped. A business that later falls inside the cap has its exception cleared."""
+    if not PILOT_LIMIT or len(sel) <= PILOT_LIMIT:
+        for r in sel:
+            clear_exception(r["biz_id"], "pilot", "not_executed_pilot_limit")
+        return sel
+    order = sorted(sel, key=lambda r: (r.get("reg_date") or "9999", r["biz_id"]))
+    keep, rest = order[:PILOT_LIMIT], order[PILOT_LIMIT:]
+    for r in rest:
+        log_exception(r["biz_id"], "pilot", "not_executed_pilot_limit", f"pilot capped at {PILOT_LIMIT} businesses (oldest license first); not collected or read yet")
+    for r in keep:
+        clear_exception(r["biz_id"], "pilot", "not_executed_pilot_limit")
+    print(f"pilot cap {PILOT_LIMIT}: running {', '.join(r['biz_id'] for r in keep)}; {len(rest)} recorded as not executed")
+    return keep
+
+
 # ---------------------------------------------------------------- cost estimate
 def estimate_one(reviews=150, pages=3, avg_review_chars=300, page_chars=10000):
     pages_needed = 1 + math.ceil(max(reviews - 8, 0) / 20)
@@ -364,7 +392,7 @@ def estimate_one(reviews=150, pages=3, avg_review_chars=300, page_chars=10000):
 
 
 def cmd_estimate(n_reviews=None):
-    sel = cmd_select()
+    sel = limited(cmd_select())
     out = []
     for r in sel:
         for label, n in (("low (50 reviews)", 50), ("typical (150)", 150), ("high (500)", 500)) if n_reviews is None else (("given", n_reviews),):
@@ -701,7 +729,7 @@ def collect_business(b, budget_usd):
 
 
 def cmd_collect(budget, fresh=False):
-    sel = cmd_select()
+    sel = limited(cmd_select())
     rows, _ = load_tracker()
     by = {r["biz_id"]: r for r in rows}
     try:
@@ -979,7 +1007,7 @@ def read_business(b, budget):
 
 
 def cmd_read(budget):
-    sel = cmd_select()
+    sel = limited(cmd_select())
     rows, _ = load_tracker()
     by = {r["biz_id"]: r for r in rows}
     try:
@@ -1090,7 +1118,9 @@ if __name__ == "__main__":
     ap.add_argument("--as", dest="why", choices=["mailed", "declined", "opted_out"])
     ap.add_argument("--confirm", action="store_true")
     ap.add_argument("--fresh", action="store_true", help="collect: discard saved review pages and collect again")
+    ap.add_argument("--limit", type=int, default=None, help="pilot cap: only the N oldest-license businesses; the rest are recorded as exceptions")
     a = ap.parse_args()
+    PILOT_LIMIT = a.limit
     try:
         if a.cmd == "select":
             cmd_select()
